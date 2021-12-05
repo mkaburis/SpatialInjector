@@ -19,12 +19,15 @@ library(tidyverse)
 library(janitor)
 library(deplyrr)
 
+census_api_key("5967e6e9042cd59877c891173cc8035c69a88162", install = TRUE)
+
 census_years <- c("2000", "2010", "2020")
 acs_years <- c("2005", "2006", "2007", "2008", "2009", "2010", "2011", "2012",
 "2013", "2014", "2015", "2016", "2017", "2018", "2019")
 
 acs_types <- c("acs1", "acs3", "acs5")
 census_summary_files <- c("sf1", "sf2")
+
 
 # Grab variable list for Census
 
@@ -38,10 +41,9 @@ census_varaible_list$mod_label <- (str_split(census_variable_list$label, "!!"))
 census_variable_list$mod_label <- str_to_title(census_variable_list$concept)
 
 nj <- get_decennial(
-  geography = "tract",
+  geography = "county",
   variables = c(poptotal = "P001001"),
   state = "NJ",
-  county = "Middlesex",
   year = 2010,
   geometry = TRUE
 )
@@ -50,6 +52,14 @@ nj %>%
   geom_sf(color = NA) + 
   scale_fill_viridis_c(option = "magma") 
 st_write(nj, "nj.shp")
+
+pasco <- get_decennial(
+  geography = "county",
+  variables = "P001001",
+  state = "FL",
+  county = "Pasco",
+  year = 2010
+)
 
 write.csv(nj, "test.csv")
 

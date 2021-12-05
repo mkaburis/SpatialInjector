@@ -4,6 +4,7 @@ census_years <- list("2000", "2010")
 acs_years <- list("2005", "2006", "2007", "2008", "2009", "2010", "2011", "2012",
                "2013", "2014", "2015", "2016", "2017", "2018", "2019")
 geography <- c("us", "state", "county", "tract")
+counties <- read.csv("./ref/us_counties.csv", header = TRUE, sep=",")
 
 ui <- fluidPage(
   titlePanel(
@@ -37,7 +38,7 @@ ui <- fluidPage(
   selectInput(
     "geography",
     label = "Geography",
-    choices = list("Nation", "State", "County"),
+    choices = geography,
     selected = c("State")
   ),
   
