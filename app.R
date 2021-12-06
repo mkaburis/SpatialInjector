@@ -5,6 +5,8 @@ library(tidyverse)
 library(tidycensus)
 library(vroom)
 library(janitor)
+library(sf)
+library(zip)
 
 census_api_key("5967e6e9042cd59877c891173cc8035c69a88162", install = TRUE, overwrite = TRUE)
 
@@ -123,8 +125,7 @@ ui <- fluidPage(
 server <- function(input, output, session) {
   
   rvals <- reactiveValues(
-    csv=NULL,
-    x=NULL
+    csv=NULL
   )
   
   findacsyr <- function(estimate) {
@@ -211,7 +212,8 @@ server <- function(input, output, session) {
   observeEvent(input$inject, {
     if(input$data_type == "American Community Survey")
     {
-      acstables <- load_variables(input$year, findacsyr(input$estimate_type), cache = TRUE) %>% 
+      survey_yr <- findacsyr(input$estimate_type)
+      acstables <- load_variables(input$year, survey_yr, cache = TRUE) %>% 
         group_by(concept) %>% 
         summarize(tablem = paste(name, collapse=' '))
       
@@ -221,32 +223,41 @@ server <- function(input, output, session) {
       
       if (input$geography == "US" || input$geography == "State")
       {
-      output$tabletest <- renderDataTable(get_acs(
+      outputtable <- get_acs(
         geography = tolower(input$geography),
         variables = c(censusvars[[1]]),
         state = input$state,
-        year = input$year), options=list(pageLength = 12, width = "100%"))
+        year = input$year,
+        survey = survey_yr
+        )
       
-        return(ttable)
+     output$tabletest <- renderDataTable(outputtable, options = list(pageLength = 12, width = "100%"))
+     rvals$csv <-outputtable
+      
       }
       
       else{
-        output$tabletest <- renderDataTable(get_acs(
+        outputtable <- get_acs(
           geography = tolower(input$geography),
           variables = c(censusvars[[1]]),
           state = input$state,
           county = cleancounty(input$county),
-          year = input$year), options=list(pageLength = 12, width = "100%"))
+          year = input$year,
+          survey = survey_yr
+          )
+        
+        output$tabletest <- renderDataTable(outputtable, options = list(pageLength = 12, width = "100%"))
+        rvals$csv <-outputtable
       }
       
     }
     else {
       
-      acstables <- load_variables(input$year, "sf1", cache = TRUE) %>% 
+      censustables <- load_variables(input$year, "sf1", cache = TRUE) %>% 
         group_by(concept) %>% 
         summarize(tablem = paste(name, collapse=' '))
       
-      censusrow <- acstables$tablem[which(acstables$concept == input$table)]
+      censusrow <- censustables$tablem[which(censustables$concept == input$table)]
       
       censusvars <- strsplit(censusrow, " ")
      
@@ -288,10 +299,143 @@ server <- function(input, output, session) {
   
   output$dl_csv <- downloadHandler(
     filename = function() {
-      paste("data.csv", sep=" ")
+      paste(input$table, ".csv")
     },
     content = function(file) {
       write.csv(rvals$csv, file)
+    }
+  )
+  
+ 
+  output$dl_shapefile <- downloadHandler(
+    filename = function() {
+      paste(input$table, ".zip")
+    },
+    content = function(file) {
+      
+      
+      if(input$data_type == "American Community Survey")
+      {
+        survey_yr <- findacsyr(input$estimate_type)
+        acstables <- load_variables(input$year, survey_yr, cache = TRUE) %>% 
+          group_by(concept) %>% 
+          summarize(tablem = paste(name, collapse=' '))
+        
+        censusrow <- acstables$tablem[which(acstables$concept == input$table)]
+        
+        censusvars <- strsplit(censusrow, " ")
+        
+        if (input$geography == "US" || input$geography == "State")
+        {
+          outputtable <- get_acs(
+            geography = tolower(input$geography),
+            variables = c(censusvars[[1]]),
+            state = input$state,
+            year = input$year,
+            survey = survey_yr,
+            geometry = TRUE
+          )
+          
+          output$tabletest <- renderDataTable(outputtable, options = list(pageLength = 12, width = "100%"))
+          rvals$csv <-outputtable
+          
+        }
+        
+        else{
+          
+          acstables <- load_variables(input$year, "sf1", cache = TRUE) %>% 
+            group_by(concept) %>% 
+            summarize(tablem = paste(name, collapse=' '))
+          
+          censusrow <- acstables$tablem[which(acstables$concept == input$table)]
+          
+          censusvars <- strsplit(censusrow, " ")
+          
+          
+          outputtable <- get_acs(
+            geography = tolower(input$geography),
+            variables = c(censusvars[[1]]),
+            state = input$state,
+            county = cleancounty(input$county),
+            year = input$year,
+            survey = survey_yr,
+            geometry = TRUE
+          )
+          
+          output$tabletest <- renderDataTable(outputtable, options = list(pageLength = 12, width = "100%"))
+          rvals$csv <-outputtable
+        }
+        
+      }
+      
+      else {  
+        
+        censustables <- load_variables(input$year, "sf1", cache = TRUE) %>% 
+          group_by(concept) %>% 
+          summarize(tablem = paste(name, collapse=' '))
+        
+        censusrow <- censustables$tablem[which(censustables$concept == input$table)]
+        
+        censusvars <- strsplit(censusrow, " ")
+        
+        
+      if (input$geography == "US" ||input$geography == "State")
+      { 
+      outputtable <- get_decennial(
+        geography = tolower(input$geography),
+        variables = c(censusvars[[1]]),
+        year = input$year,
+        geometry = TRUE)
+      }
+      
+      else{
+        outputtable <- get_acs(
+          geography = tolower(input$geography),
+          variables = c(censusvars[[1]]),
+          state = input$state,
+          county = cleancounty(input$county),
+          year = input$year,
+          survey = survey_yr,
+          geometry = TRUE) 
+      }
+      }
+      
+      # temp_shp <- tempdir()
+      # st_write(outputtable, temp_shp)
+      # 
+      # zip_file <- file.path(temp_shp, "test.zip")
+      # shp_files <- list.files(temp_shp,
+      #                         "test",
+      #                         full.names = TRUE)
+      # zip_command <- paste("zip -j",
+      #                     zip_file,
+      #                     paste(shp_files, collapse = " "))
+      # system(zip_command)
+      # file.copy(zip_file, file)
+      # file.remove(zip_file, shp_files)
+      
+      # Adopted zipping function from dgeocongo on StackExange:
+      # https://stackoverflow.com/questions/41707760/download-a-shape-file-from-shiny
+      
+      withProgress(message = "Downloading Shapefile", {
+        
+        incProgress(0.5)
+        tmp.path <- dirname(file)
+        
+        name.base <- file.path(tmp.path, "file")
+        name.glob <- paste0(name.base, ".*")
+        name.shp  <- paste0(name.base, ".shp")
+        name.zip  <- paste0(name.base, ".zip")
+        
+        if (length(Sys.glob(name.glob)) > 0) file.remove(Sys.glob(name.glob))
+             st_write(outputtable, name.shp)
+        
+        zipr(zipfile = name.zip, files = Sys.glob(name.glob))
+        req(file.copy(name.zip, file))
+        
+        if (length(Sys.glob(name.glob)) > 0) file.remove(Sys.glob(name.glob))
+        incProgress(0.5)
+      })
     }
   )
   
