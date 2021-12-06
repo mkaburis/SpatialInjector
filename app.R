@@ -1,9 +1,12 @@
 library(shiny)
+library(shinyjs)
 library(dplyr)
 library(tidyverse)
 library(tidycensus)
 library(vroom)
 library(janitor)
+
+census_api_key("5967e6e9042cd59877c891173cc8035c69a88162", install = TRUE, overwrite = TRUE)
 
 census_years <- list("2000", "2010")
 acs1_years <- list("2005", "2006", "2007", "2008", "2009", "2010", "2011", "2012",
@@ -19,25 +22,28 @@ acs_types <- c("acs1", "acs3", "acs5")
 
 
 ui <- fluidPage(
+  shinyjs::useShinyjs(),
   titlePanel(
     title = (div(img(src = "logo.png", height = 100), "Spatial Injector - Census Data Aggregator for GIS",
                  windowTitle="Spatial Injector"))
   ),
   
-  sidebarLayout(
-    sidebarPanel(
+  fluidRow(
+    column(4,
       selectInput(
         "data_type",
         label = "Census Data Type",
         choices = list("Decennial Census", "American Community Survey"),
-        selected = c("Decennial Census")
+        selected = c("Decennial Census"),
+        width = "100%"
       ),
       
       selectInput(
         "year",
         label = "Year",
         choices = census_years,
-        selected = c("2010")
+        selected = c("2010"),
+        width = "100%"
       ),
       
       conditionalPanel(
@@ -46,7 +52,8 @@ ui <- fluidPage(
           "estimate_type",
           label = "ACS Estimate Type",
           choices = list("1-Year", "3-Year", "5-Year"),
-          selected = c("1-Year")
+          selected = c("1-Year"),
+          width = "100%"
         )
       ),
       
@@ -54,7 +61,8 @@ ui <- fluidPage(
         "geography",
         label = "Geography",
         choices = geography,
-        selected = c("State")
+        selected = c("State"),
+        width = "100%"
       ),
       
       conditionalPanel(
@@ -77,32 +85,59 @@ ui <- fluidPage(
         label = "Data Table",
         choices = NULL,
         selected = c("test"),
+        width = "100%"
         ),
       
       fluidRow(
-        actionButton("findtable","Search for Tables", icon = icon("search"), class="btn btn-success"),
-        actionButton("inject","Inject Data", icon = icon("syringe"), class="btn btn-success")
+        
+        column(12,
+               
+               splitLayout(cellWidths = c("50%", "50%"),
+                           actionButton("findtable","Search for Tables", icon = icon("search"), class="btn btn-success", width = "95%"),
+                           actionButton("inject","Inject Data", icon = icon("syringe"), class="btn btn-danger", width = "95%")
+                           )
       )
-
       
-    ),
+    )),
     
-    mainPanel(
-      # tableOutput("tabletest"),
-      textOutput("hello")
+    
+    column(8,
+      textOutput("hello"),
+      textOutput("fx"),
+      dataTableOutput("tabletest")
+    )
+  ),
+  
+  fluidRow(
+    align = "center",
+    br(),
+    column(6,
+           disabled(downloadButton("dl_csv", "Download CSV", width = "98%"))
+           ),
+    column(6,
+           disabled(downloadButton("dl_shapefile", "Download Shapefile", width = "98%"))
+           )
     )
   )
 
-  
-)
-
 server <- function(input, output, session) {
   
+  rvals <- reactiveValues(
+    csv=NULL,
+    x=NULL
+  )
   
   findacsyr <- function(estimate) {
     acs_t <- switch(estimate, "1-Year" = acs_types[1], "3-Year" = acs_types[2],
                     "5-Year" = acs_types[3]) 
     return(acs_t)
+  }
+  
+  cleancounty <- function(countyraw) {
+    countyname <- unlist(strsplit(input$county, " "))
+    countyname <- countyname[!countyname %in% "County"]
+    modcounty <- paste(countyname, collapse = " ")
+    return(modcounty)
   }
   
   observe( 
@@ -156,27 +191,112 @@ server <- function(input, output, session) {
     #                      choices = load_variables(input$year, findacsyr(input$estimate_type), cache = TRUE)
     
     if (input$data_type == "American Community Survey") {
-    updateSelectizeInput(session, 'table', choices = load_variables(input$year, findacsyr(input$estimate_type), cache = TRUE))
+      
+      acstables <- load_variables(input$year, findacsyr(input$estimate_type), cache = TRUE) %>% 
+        group_by(concept) %>% 
+        summarize(tablem = paste(name, collapse=' '))
+      updateSelectizeInput(session, 'table', choices = acstables[1])
     }
     else {
-      updateSelectizeInput(session, 'table', choices = load_variables(input$year, "sf1", cache = TRUE))
+      
+      censustables <- load_variables(input$year, "sf1", cache = TRUE) %>% 
+        group_by(concept) %>% 
+        summarize(tablem = paste(name, collapse=' '))
+      updateSelectizeInput(session, 'table', choices = censustables[1])
     }
     
-    return("hello")
+    return(input$table[2])
   })
   
-  f1 <- eventReactive(input$inject, {
-    if(input$data_type == "Decennial Census")
+  observeEvent(input$inject, {
+    if(input$data_type == "American Community Survey")
     {
-      get_decennial(
-        geography = 
-      )
+      acstables <- load_variables(input$year, findacsyr(input$estimate_type), cache = TRUE) %>% 
+        group_by(concept) %>% 
+        summarize(tablem = paste(name, collapse=' '))
+      
+      censusrow <- acstables$tablem[which(acstables$concept == input$table)]
+      
+      censusvars <- strsplit(censusrow, " ")
+      
+      if (input$geography == "US" || input$geography == "State")
+      {
+      output$tabletest <- renderDataTable(get_acs(
+        geography = tolower(input$geography),
+        variables = c(censusvars[[1]]),
+        state = input$state,
+        year = input$year), options=list(pageLength = 12, width = "100%"))
+      
+        return(ttable)
+      }
+      
+      else{
+        output$tabletest <- renderDataTable(get_acs(
+          geography = tolower(input$geography),
+          variables = c(censusvars[[1]]),
+          state = input$state,
+          county = cleancounty(input$county),
+          year = input$year), options=list(pageLength = 12, width = "100%"))
+      }
+      
     }
+    else {
+      
+      acstables <- load_variables(input$year, "sf1", cache = TRUE) %>% 
+        group_by(concept) %>% 
+        summarize(tablem = paste(name, collapse=' '))
+      
+      censusrow <- acstables$tablem[which(acstables$concept == input$table)]
+      
+      censusvars <- strsplit(censusrow, " ")
+     
+      if (input$geography == "US" ||input$geography == "State")
+      { 
+       outputtable <- get_decennial(
+         geography = tolower(input$geography),
+         variables = c(censusvars[[1]]),
+         year = input$year)
+      
+        output$tabletest <- renderDataTable(outputtable, options = list(pageLength = 12, width = "100%"))
+        
+        rvals$csv <-outputtable
+      }
+      
+      else {
+        outputtable <- get_decennial(
+          geography = tolower(input$geography),
+          variables = c(censusvars[[1]]),
+          state = input$state,
+          county = cleancounty(input$county),
+          year = input$year)
+        
+        output$tabletest <- renderDataTable(outputtable, options=list(pageLength = 12, width = "100%"))
+        rvals$csv <-outputtable
+      }
+      
+    }
+    
+    observeEvent(input$csv, {
+      
+    })
+    
+    shinyjs::enable("dl_csv")
+    shinyjs::enable("dl_shapefile")
+    
+
   })
+  
+  output$dl_csv <- downloadHandler(
+    filename = function() {
+      paste("data.csv", sep=" ")
+    },
+    content = function(file) {
+      write.csv(rvals$csv, file)
+    }
+  )
+  
   
   # output$tabletest <- renderTable(load_variables(input$year, "sf1", cache = TRUE))
-  
-  
 }
 
 shinyApp(ui, server)
