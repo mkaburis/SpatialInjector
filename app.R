@@ -3,7 +3,6 @@ library(shinyjs)
 library(dplyr)
 library(tidyverse)
 library(tidycensus)
-library(vroom)
 library(janitor)
 library(sf)
 library(zip)
@@ -68,12 +67,12 @@ ui <- fluidPage(
       ),
       
       conditionalPanel(
-        condition = "input.geography == 'County' | input.geography == 'Tract'" ,
+        condition = "input.geography != 'US'" ,
         selectInput(
           "state",
           label = "State",
-          choices = state.abb,
-          selected = c(state.abb[1])
+          choices = c("All States", state.abb),
+          selected = c("All States")
         )
       ),
       
@@ -103,14 +102,24 @@ ui <- fluidPage(
         column(12,
                
                splitLayout(cellWidths = c("50%", "50%"),
-                           actionButton("findtable","Search for Tables", icon = icon("search"), class="btn btn-success", width = "95%"),
-                           actionButton("inject","Inject Data", icon = icon("syringe"), class="btn btn-danger", width = "95%")
+                           actionButton("findtable","Find Tables", icon = icon("table"), class="btn btn-warning", width = "95%"),
+                           actionButton("reset","Reset", icon = icon("undo"), class="btn btn-danger", width = "95%")
                            )
       )
       
-    )),
+    ),
     
+    br(),
     
+    fluidRow(
+      column(12,
+      actionButton("inject","Inject Data", icon = icon("syringe"), class="btn btn-success", width = "90%"),
+      align = "center")
+    )
+    
+    ),
+    
+
     column(8,
       textOutput("hello"),
       textOutput("fx"),
@@ -172,8 +181,6 @@ server <- function(input, output, session) {
           updateSelectInput(session,'year', choices=acs5_years, selected = c("2009"))
           # updateSelectInput(session, 'table', choices = load_variables(input$year, "acs5", cache = TRUE), server = TRUE)
         }
-
-        
         
        }
       
@@ -233,37 +240,59 @@ server <- function(input, output, session) {
     return(input$table[2])
   })
   
+  # Reset app
+  observeEvent(input$reset, {
+    reset("data_type")
+    reset("year")
+    reset("geography")
+    reset("state")
+    reset("county")
+    reset("table_type")
+    reset("table")
+    output$tabletest<- renderDataTable({NULL})
+    disable("dl_shapefile")
+    disable("dl_csv")
+  })
+  
   observeEvent(input$inject, {
-    if(input$data_type == "American Community Survey")
+    if (input$data_type == "American Community Survey")
     {
       survey_yr <- findacsyr(input$estimate_type)
       acstables <- load_variables(input$year, survey_yr, cache = TRUE) %>% 
         group_by(concept) %>% 
         summarize(tablem = paste(name, collapse=' '))
       
-      censusrow <- acstables$tablem[which(acstables$concept == input$table)]
+      if (input$table_type == "concept") {
+        censusrow <- acstables$tablem[which(acstables$concept == input$table)]
+        tempvar <- strsplit(censusrow, " ")
+        censusvars <- tempvar[[1]]
+      }
       
-      censusvars <- strsplit(censusrow, " ")
+      else {
+        censusvars <- input$table
+      }
       
-      if (input$geography == "US" || input$geography == "State")
+      
+      if (input$geography == "US" ||  input$state =="All States")
       {
       outputtable <- get_acs(
         geography = tolower(input$geography),
-        variables = c(censusvars[[1]]),
-        state = input$state,
-        year = input$year,
-        survey = survey_yr
+        variables = c(censusvars),
+        year = as.numeric(input$year),
+        survey = survey_yr,
+        output = "wide"
         )
       
       census_vals$csv <-outputtable
       
+      tryCatch( {
       census_vals$shp <- get_acs(
         geography = tolower(input$geography),
-        variables = c(censusvars[[1]]),
-        state = input$state,
-        year = input$year,
+        variables = c(censusvars),
+        year = as.numeric(input$year),
         survey = survey_yr,
-        geometry = TRUE)
+        geometry = TRUE)}, error= function(e) {showNotification("Error: Geometry Data Not Available", type = "error")
+          shinyjs::disable("dl_shapefile")} )
       
       output$tabletest <- renderDataTable(outputtable, options = list(pageLength = 12, width = "100%"))
      
@@ -273,7 +302,7 @@ server <- function(input, output, session) {
       else{
         outputtable <- get_acs(
           geography = tolower(input$geography),
-          variables = c(censusvars[[1]]),
+          variables = c(censusvars),
           state = input$state,
           county = cleancounty(input$county),
           year = input$year,
@@ -282,15 +311,17 @@ server <- function(input, output, session) {
         
         census_valus$csv <-outputtable
         
+        tryCatch({
         census_vals$shp <- get_acs(
           geography = tolower(input$geography),
-          variables = c(censusvars[[1]]),
+          variables = c(censusvars),
           state = input$state,
           county = cleancounty(input$county),
           year = input$year,
           survey = survey_yr,
           geometry = TRUE
-        )
+        )}, error= function(e) {showNotification("Error: Geometry Data Not Available", type = "error")
+          shinyjs::disable("dl_shapefile")})
         
         
         output$tabletest <- renderDataTable(outputtable, options = list(pageLength = 12, width = "100%"))
@@ -300,28 +331,39 @@ server <- function(input, output, session) {
     }
     else {
       
+      if (input$table_type == "concept") {
+      
       censustables <- load_variables(input$year, "sf1", cache = TRUE) %>% 
         group_by(concept) %>% 
         summarize(tablem = paste(name, collapse=' '))
       
       censusrow <- censustables$tablem[which(censustables$concept == input$table)]
       
-      censusvars <- strsplit(censusrow, " ")
+      tempvars <- strsplit(censusrow, " ")
+      
+      cenusvars <- tempvars[[1]]
+      }
+      
+      else {
+        censusvars <- input$table
+      }
      
-      if (input$geography == "US" ||input$geography == "State")
+      if (input$geography == "US" || input$state == "All States")
       { 
        outputtable <- get_decennial(
          geography = tolower(input$geography),
-         variables = c(censusvars[[1]]),
+         variables = c(censusvars),
          year = input$year)
        
        census_vals$csv <-outputtable
        
+       tryCatch({
        census_vals$shp <- get_decennial(
          geography = tolower(input$geography),
-         variables = c(censusvars[[1]]),
+         variables = c(censusvars),
          year = input$year,
-         geometry = TRUE)
+         geometry = TRUE) }, error= function(e) {showNotification("Error: Geometry Data Not Available", type = "error")
+           shinyjs::disable("dl_shapefile")})
       
         output$tabletest <- renderDataTable(outputtable, options = list(pageLength = 12, width = "100%"))
       }
@@ -329,20 +371,22 @@ server <- function(input, output, session) {
       else {
         outputtable <- get_decennial(
           geography = tolower(input$geography),
-          variables = c(censusvars[[1]]),
+          variables = c(censusvars), 
           state = input$state,
           county = cleancounty(input$county),
           year = input$year)
         
         census_vals$csv <-outputtable
         
+        tryCatch({
         census_vals$shp <- get_decennial(
           geography = tolower(input$geography),
-          variables = c(censusvars[[1]]),
+          variables = c(censusvars),
           state = input$state,
           county = cleancounty(input$county),
           year = input$year,
-          geometry = TRUE)
+          geometry = TRUE)},error= function(e) {showNotification("Error: Geometry Data Not Available", type = "error")
+            shinyjs::disable("dl_shapefile")})
         
         output$tabletest <- renderDataTable(outputtable, options=list(pageLength = 12, width = "100%"))
        
@@ -350,23 +394,19 @@ server <- function(input, output, session) {
       
     }
     
-    observeEvent(input$csv, {
-      
-    })
-    
     shinyjs::enable("dl_csv")
     shinyjs::enable("dl_shapefile")
     
-
   })
   
   output$dl_csv <- downloadHandler(
     filename = function() {
       paste(input$table, ".csv")
     },
-    content = function(file) { withProgress(message = "Downloading CSV", {
+    content = function(file) { 
+      withProgress(message = "Downloading CSV", {
       incProgress(0.5)
-      write.csv(rvals$csv, file)
+      write.csv(census_vals$csv, file)
       incProgress(0.5)
     })
      
